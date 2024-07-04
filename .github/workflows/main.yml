@@ -1,49 +1,68 @@
 name: Deploy to ECR
-
 on:
- 
   push:
     branches: [ main ]
 
 jobs:
-  
   build:
-    
     name: Build Image
     runs-on: ubuntu-latest
 
-   
     steps:
-
-    - name: Check out code
-      uses: actions/checkout@v2
+      - name: Check out code
+        uses: actions/checkout@v2
     
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ap-northeast-2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
 
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
       
-    - name: Get image tag(verion)
-      id: image
-      run: |
-        VERSION=\$(echo \${{ github.sha }} | cut -c1-8)
-        echo VERSION=\$VERSION
-        echo "::set-output name=version::\$VERSION" 
+      - name: Get image tag (version)
+        id: image
+        run: |
+          VERSION=$(echo ${{ github.sha }} | cut -c1-8)
+          echo "::set-output name=version::$VERSION"
 
-    - name: Build, tag, and push image to Amazon ECR
-	    id: image-info
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: cccr
-        IMAGE_TAG: \${{ steps.image.outputs.version }}
-      run: |
-	      echo "::set-output name=ecr_repository::\$ECR_REPOSITORY"
-        echo "::set-output name=image_tag::\$IMAGE_TAG"
-        docker build -t \$ECR_REGISTRY/\$ECR_REPOSITORY:\$IMAGE_TAG .
-        docker push \$ECR_REGISTRY/\$ECR_REPOSITORY:\$IMAGE_TAG
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cccr
+          IMAGE_TAG: ${{ steps.image.outputs.version }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          
+      - name: Setup Kustomize
+        uses: imranismail/setup-kustomize@v1
+
+      - name: Checkout kustomize repository
+        uses: actions/checkout@v2
+        with:
+          repository: seonsikchoi/k8s
+          ref: main
+          token: ${{ secrets.PAT }}
+          path: k8s
+
+      - name: Update Kubernetes resources
+        run: |
+          echo ${{ steps.login-ecr.outputs.registry }}
+          echo ${{ steps.image.outputs.version }}
+          cd k8s/manifestfile/overlays/
+          kustomize edit set image ${{ steps.login-ecr.outputs.registry }}/cccr=${{ steps.login-ecr.outputs.registry }}/cccr:${{ steps.image.outputs.version }}
+          cat kustomization.yaml
+
+      - name: Commit files
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT }}
+        run: |
+          cd k8s
+          git config --global user.email "css926@gmail.com"
+          git config --global user.name "seonsikchoi"
+          git commit -am "Update image tag"
+          git push -u origin main
